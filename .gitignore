@@ -1,0 +1,15 @@
+DockerfileDebug
+__pycache__
+build
+dist
+TESTbuildspec.yml
+validationOutput.json
+20*
+logs
+WIGValidator
+notes.txt
+*.egg-info
+*.spec
+*.pyc
+.idea
+.vscode

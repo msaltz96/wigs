@@ -1,0 +1,30 @@
+{
+  "EnhancedNetworking": {
+    "enabled": true,
+    "interface": 0
+  },
+  "FreeDiskSpace": {
+    "enabled": true,
+    "min_gb": 20
+  },
+  "ThirdPartySoftware": {
+    "enabled": true,
+    "custom_software_list": null
+  },
+  "SSHConfiguration": {
+    "enabled": true
+  },
+  "YumRepoAccess": {
+    "enabled": true
+  },
+  "InstanceProfile": {
+    "enabled": true,
+    "role_name": "customer-mc-ec2-instance-profile"
+  },
+  "SSMAgent": {
+    "enabled": true
+  },
+  "OperatingSystem": {
+    "enabled": true
+  }
+}

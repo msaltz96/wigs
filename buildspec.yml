@@ -1,0 +1,33 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - yum install centos-release-scl-rh -y
+      - yum install rh-python36 rh-python36-python-pip rh-python36-python-devel -y
+      - ln -s /opt/rh/rh-python36/root/usr/lib64/libpython3.6m.so.rh-python36-1.0 /opt/rh/rh-python36/root/usr/lib64/libpython3.6.so.1.0
+      - source /opt/rh/rh-python36/enable
+      - pip3 install . flake8 pytest
+      # - flake8 App/
+      - pytest tests/*
+      - pip3 install pyinstaller awscli
+      - yum install zip -y
+      - cd Lambda
+      - zip -r ../WIGValidationLinuxLambda.zip *
+      - cd ..
+      - aws s3api put-object --bucket wig-validation --key WIGValidationLinuxLambda.zip --body ./WIGValidationLinuxLambda.zip
+      - aws lambda update-function-code --function-name IntegrationTestLinux --s3-bucket wig-validation --s3-key WIGValidationLinuxLambda.zip
+  build:
+    commands:
+      - pyinstaller --onefile --name=pre-wigs-validator control_script.py
+      - mv dist/pre-wigs-validator pre-wigs-validator
+artifacts:
+  files:
+    - 'pre-wigs-validator'
+    - 'pre_wigs_validation/*'
+    - 'setup.py'
+    - 'readme.md'
+    - 'documentation.md'
+    - 'control_script.py'
+    - 'config.json'
+    - 'THIRD-PARTY-LICENSES_Y58sna5k12.txt'

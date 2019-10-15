@@ -1,0 +1,341 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: A continuous integration pipeline for the pre-WIGs Linux validation code
+Parameters:
+  RepositoryName:
+    Description: Code Commit Repository Name
+    Type: String
+  RepositoryBranch:
+    Description: Code Commit Repository Branch Name
+    Type: String
+    Default: mainline
+Mappings:
+  LambdaLocationMap:
+    Linux:
+      S3Bucket: wig-validation
+      S3Key: WIGValidationLinuxLambda.zip
+Resources:
+  CodePipelineProject:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn:
+      - CodePipelineServiceRole
+      - CodeBuildProjectTestStage
+      - ArtifactStoreBucket
+      - CodePipelineLambdaExecRoleLinux
+      - IntegrationTestInstanceProfile
+    Properties:
+      Name: !Sub ${AWS::StackName}-codepipeline
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+          - Name: Source
+            ActionTypeId:
+              Category: Source
+              Owner: AWS
+              Version: 1
+              Provider: CodeCommit
+            OutputArtifacts:
+            - Name: MyApp
+            Configuration:
+              RepositoryName: !Ref RepositoryName
+              PollForSourceChanges: True
+              BranchName: !Ref RepositoryBranch
+            RunOrder: 1
+        - Name: UnitTest
+          Actions:
+          - Name: CodeBuildTest
+            InputArtifacts:
+            - Name: MyApp
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: 1
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: !Ref CodeBuildProjectTestStage
+            OutputArtifacts:
+            - Name: BuildOutput
+            RunOrder: 1
+        - Name: IntegrationTest
+          Actions:
+          - Name: LambdaIntegration
+            InputArtifacts:
+            - Name: BuildOutput
+            ActionTypeId:
+              Category: Invoke
+              Owner: AWS
+              Version: 1
+              Provider: Lambda
+            Configuration:
+              FunctionName: !Ref IntegrationTestLambda
+              UserParameters: !GetAtt IntegrationTestInstanceProfile.Arn
+            RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        Location:
+          Ref: ArtifactStoreBucket
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+  CodeBuildProjectTestStage:
+    Type: AWS::CodeBuild::Project
+    DependsOn:
+      - CodeBuildServiceRole
+      - ArtifactStoreBucket
+    Properties:
+      Name: !Sub ${AWS::StackName}-codebuild-teststage
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: centos:6
+        Type: LINUX_CONTAINER
+        PrivilegedMode: False
+        EnvironmentVariables:
+          - Name: Stage
+            Value: test
+      Source:
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 10
+  IntegrationTestLambda:
+    DependsOn:
+      - CodePipelineLambdaExecRoleLinux
+      - CodePipelineLambdaExecPolicy
+      - IntegrationTestInstanceProfile
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: IntegrationTestLinux
+      Handler: index.handler
+      Role: !GetAtt CodePipelineLambdaExecRoleLinux.Arn
+      Runtime: python3.7
+      Timeout: 300
+      Code:
+        S3Bucket: !FindInMap [LambdaLocationMap, Linux, S3Bucket]
+        S3Key: !FindInMap [LambdaLocationMap, Linux, S3Key]
+      Environment:
+        Variables:
+          log_group: IntegrationTestLinux
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+  CodeBuildServiceRolePolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Resource: '*'
+            Action:
+              - 'lambda:InvokeFunction'
+              - 'lambda:UpdateFunctionCode'
+          - Effect: Allow
+            Resource: '*'
+            Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+          - Effect: Allow
+            Resource: '*'
+            Action:
+              - 's3:PutObject'
+              - 's3:GetObject'
+              - 's3:GetObjectVersion'
+          - Effect: Allow
+            Resource:
+              - !Sub 'arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:!Ref CodePipelineProject'
+            Action:
+              - 'codecommit:*'
+              - 'codepipeline:*'
+      PolicyName: CodeBuildServiceRolePolicy
+      Roles:
+        - !Ref CodeBuildServiceRole
+  CodePipelineServiceRolePolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Resource:
+              -
+                Fn::GetAtt:
+                  - ArtifactStoreBucket
+                  - Arn
+            Action:
+              - 's3:PutObject'
+              - 's3:GetObject'
+              - 's3:GetObjectVersion'
+              - 's3:GetBucketVersioning'
+          - Action:
+              - 'lambda:invokefunction'
+              - 'lambda:listfunctions'
+            Resource: '*'
+            Effect: Allow
+          - Action:
+              - 's3:PutObject'
+            Resource:
+              - 'arn:aws:s3:::codepipeline*'
+            Effect: Allow
+          - Action:
+              - 'codecommit:CancelUploadArchive'
+              - 'codecommit:GetBranch'
+              - 'codecommit:GetCommit'
+              - 'codecommit:GetUploadArchiveStatus'
+              - 'codecommit:UploadArchive'
+            Resource: '*'
+            Effect: Allow
+          - Action:
+              - 'cloudwatch:*'
+              - 's3:*'
+            Resource: '*'
+            Effect: Allow
+          - Action:
+              - 'codebuild:BatchGetBuilds'
+              - 'codebuild:StartBuild'
+            Resource: '*'
+            Effect: Allow
+      PolicyName: CodePipelineServiceRolePolicy
+      Roles:
+        - !Ref CodePipelineServiceRole
+  CodePipelineLambdaExecRoleLinux:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: CodePipelineLambdaExecRoleLinux
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+  CodePipelineLambdaExecPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - 'codepipeline:PutJobSuccessResult'
+              - 'codepipeline:PutJobFailureResult'
+            Resource: '*'
+            Effect: Allow
+          - Action:
+              - 'ec2:*'
+            Resource: '*'
+            Effect: Allow
+          - Action:
+              - 'iam:PassRole'
+            Resource: '*'
+            Effect: Allow
+          - Action:
+              - 'logs:CreateLogGroup'
+            Resource: '*'
+            Effect: Allow
+          - Action:
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource: '*'
+            Effect: Allow
+          - Action:
+              - 's3:PutObject'
+              - 's3:GetObject'
+              - 's3:GetObjectVersion'
+            Resource: '*'
+            Effect: Allow
+          - Action:
+              - 'ssm:DescribeParameters'
+              - 'ssm:GetParameters'
+              - 'ssm:GetParameter'
+              - 'ssm:SendCommand'
+              - 'ssm:ListCommands'
+              - 'ssm:DescribeInstanceInformation'
+              - 'ssm:ListCommandInvocations'
+              - 'ssm:GetCommandInvocation'
+            Resource: '*'
+            Effect: Allow
+        Version: '2012-10-17'
+      PolicyName: CodePipelineLambdaExecPolicy
+      Roles:
+        - !Ref CodePipelineLambdaExecRoleLinux
+  ArtifactStoreBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      AccessControl: BucketOwnerFullControl
+  IntegrationTestInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref IntegrationTestRole
+  IntegrationTestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+  IntegrationTestPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - 's3:List*'
+              - 's3:GetObject'
+            Resource: '*'
+            Effect: Allow
+          - Action:
+              - 'ssm:*'
+            Resource: '*'
+            Effect: Allow
+        Version: '2012-10-17'
+      PolicyName: IntegrationTestPolicy
+      Roles:
+        - !Ref IntegrationTestRole
+Outputs:
+  ArtifactStoreBucket:
+    Description: Artifact Store Bucket Name
+    Value: !Ref ArtifactStoreBucket
+  ArtifactStoreBucketArn:
+    Description: Artifact Store Bucket Arn
+    Value:
+      Fn::GetAtt:
+        - ArtifactStoreBucket
+        - Arn
